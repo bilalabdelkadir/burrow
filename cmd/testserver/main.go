@@ -7,7 +7,10 @@ import (
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Println("incoming request:", r.Method, r.URL.Path)
+		log.Println("Headers received:")
+		for name, values := range r.Header {
+			log.Printf("  %s: %v\n", name, values)
+		}
 		w.Write([]byte("Hello from localhost:3000"))
 	})
 

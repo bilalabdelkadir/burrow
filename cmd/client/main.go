@@ -36,6 +36,29 @@ func main() {
 			log.Fatal(err)
 		}
 
+		for {
+			headerLine, err := reader.ReadString('\n')
+			if err != nil {
+				log.Println("Error reading header:", err)
+				break
+			}
+
+			headerLine = strings.TrimSpace(headerLine)
+			if headerLine == "" {
+				break
+			}
+
+			parts := strings.SplitN(headerLine, ":", 2)
+			if len(parts) != 2 {
+				log.Println("Invalid header line:", headerLine)
+				continue
+			}
+
+			name := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			req.Header.Add(name, value)
+		}
+
 		client := http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {

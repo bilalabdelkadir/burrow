@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 var tunnelConn net.Conn
 var waiters = make(map[string]chan []byte)
+var mu sync.Mutex
 
 func main() {
 
@@ -23,12 +25,11 @@ func main() {
 }
 
 func readResponses() {
-	// 1️⃣ create bufio.Reader from tunnelConn
+
 	reader := bufio.NewReader(tunnelConn)
 
-	// 2️⃣ loop forever to keep reading responses
 	for {
-		// 3️⃣ read request ID (until \n)
+
 		requestId, err := reader.ReadString('\n')
 		if err != nil {
 			log.Println("Error reading requestId:", err)
@@ -36,7 +37,6 @@ func readResponses() {
 		}
 		requestId = strings.TrimSpace(requestId)
 
-		// 4️⃣ read 4 bytes length
 		lenBuf := make([]byte, 4)
 		_, err = io.ReadFull(reader, lenBuf)
 		if err != nil {
@@ -45,7 +45,6 @@ func readResponses() {
 		}
 		bodyLength := binary.BigEndian.Uint32(lenBuf)
 
-		// 5️⃣ read body
 		body := make([]byte, bodyLength)
 		_, err = io.ReadFull(reader, body)
 		if err != nil {
@@ -53,14 +52,14 @@ func readResponses() {
 			return
 		}
 
-		// 6️⃣ find channel in waiters map
+		mu.Lock()
 		ch, ok := waiters[requestId]
+		mu.Unlock()
 		if !ok {
 			log.Println("No channel found for requestId:", requestId)
 			continue
 		}
 
-		// 7️⃣ send body to channel (wakes the handler)
 		ch <- body
 	}
 }
@@ -96,15 +95,27 @@ func acceptHTTPRequests() {
 			w.Write([]byte("tunnel not ready"))
 			return
 		}
+
 		requestId := fmt.Sprintf("req-%d", time.Now().UnixNano())
-		formattedMsg := requestId + " " + r.Method + " " + r.URL.Path + "\n"
 		ch := make(chan []byte)
+		mu.Lock()
 		waiters[requestId] = ch
+		mu.Unlock()
+		formattedMsg := requestId + " " + r.Method + " " + r.URL.Path + "\n"
 		tunnelConn.Write([]byte(formattedMsg))
+
+		for name, values := range r.Header {
+			for _, v := range values {
+				tunnelConn.Write([]byte(name + ": " + v + "\n"))
+			}
+		}
+		tunnelConn.Write([]byte("\n"))
 
 		body := <-ch
 		w.Write(body)
+		mu.Lock()
 		delete(waiters, requestId)
+		mu.Unlock()
 
 	})
 
