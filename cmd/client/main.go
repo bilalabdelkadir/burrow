@@ -27,8 +27,9 @@ func main() {
 			return
 		}
 		parts := strings.Fields(line)
-		method := parts[0]
-		path := parts[1]
+		requestId := parts[0]
+		method := parts[1]
+		path := parts[2]
 
 		req, err := http.NewRequest(method, "http://localhost:3000"+path, nil)
 		if err != nil {
@@ -53,6 +54,7 @@ func main() {
 		lenBuf := make([]byte, 4)
 		binary.BigEndian.PutUint32(lenBuf, bodyBytesLength)
 
+		conn.Write([]byte(requestId + "\n"))
 		conn.Write(lenBuf)
 		conn.Write(bodyBytes)
 
