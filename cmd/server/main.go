@@ -8,14 +8,21 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 var tunnelConn net.Conn
-var waiters = make(map[string]chan []byte)
+var waiters = make(map[string]chan Response)
 var mu sync.Mutex
+
+type Response struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+}
 
 func main() {
 
@@ -36,6 +43,36 @@ func readResponses() {
 			return
 		}
 		requestId = strings.TrimSpace(requestId)
+
+		statusCodeStr, err := reader.ReadString('\n')
+		if err != nil {
+			log.Println("Error reading statusCode:", err)
+			return
+		}
+		statusCodeStr = strings.TrimSpace(statusCodeStr)
+		statusCode, err := strconv.Atoi(statusCodeStr)
+		if err != nil {
+			log.Println("Failed to convert status code:", err)
+			return
+		}
+		headers := make(http.Header)
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			line = strings.TrimSpace(line)
+			if line == "" {
+				break
+			}
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				name := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				headers.Add(name, value)
+			}
+		}
 
 		lenBuf := make([]byte, 4)
 		_, err = io.ReadFull(reader, lenBuf)
@@ -60,7 +97,13 @@ func readResponses() {
 			continue
 		}
 
-		ch <- body
+		response := Response{
+			StatusCode: statusCode,
+			Body:       body,
+			Headers:    headers,
+		}
+
+		ch <- response
 	}
 }
 
@@ -97,11 +140,12 @@ func acceptHTTPRequests() {
 		}
 
 		requestId := fmt.Sprintf("req-%d", time.Now().UnixNano())
-		ch := make(chan []byte)
+		ch := make(chan Response)
 		mu.Lock()
 		waiters[requestId] = ch
 		mu.Unlock()
-		formattedMsg := requestId + " " + r.Method + " " + r.URL.Path + "\n"
+		formattedMsg := requestId + " " + r.Method + " " + r.URL.RequestURI() + "\n"
+		mu.Lock()
 		tunnelConn.Write([]byte(formattedMsg))
 
 		for name, values := range r.Header {
@@ -109,10 +153,32 @@ func acceptHTTPRequests() {
 				tunnelConn.Write([]byte(name + ": " + v + "\n"))
 			}
 		}
+
 		tunnelConn.Write([]byte("\n"))
 
-		body := <-ch
-		w.Write(body)
+		lenBuf := make([]byte, 4)
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Println("Error reading body:", err)
+			return
+		}
+		log.Printf("Server sending body: %d bytes, content: %s", len(bodyBytes), string(bodyBytes))
+
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(bodyBytes)))
+
+		tunnelConn.Write(lenBuf)
+		tunnelConn.Write(bodyBytes)
+		mu.Unlock()
+
+		response := <-ch
+		log.Printf("Response received for %s: status=%d, body=%d bytes", requestId, response.StatusCode, len(response.Body))
+		for name, values := range response.Headers {
+			for _, v := range values {
+				w.Header().Add(name, v)
+			}
+		}
+		w.WriteHeader(response.StatusCode)
+		w.Write(response.Body)
 		mu.Lock()
 		delete(waiters, requestId)
 		mu.Unlock()

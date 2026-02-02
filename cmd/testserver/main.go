@@ -1,19 +1,20 @@
 package main
 
 import (
+	"io"
 	"log"
 	"net/http"
 )
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		log.Println("Headers received:")
-		for name, values := range r.Header {
-			log.Printf("  %s: %v\n", name, values)
-		}
-		w.Write([]byte("Hello from localhost:3000"))
-	})
+		body, _ := io.ReadAll(r.Body)
 
-	log.Println("Test server listening on :3000")
-	log.Fatal(http.ListenAndServe(":3000", nil))
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Custom-Header", "burrow-test")
+		w.WriteHeader(201) // Created, not 200
+		w.Write([]byte(`{"received": "` + string(body) + `"}`))
+	})
+	log.Println("Test server on :3000")
+	http.ListenAndServe(":3000", nil)
 }

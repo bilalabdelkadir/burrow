@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -30,6 +33,7 @@ func main() {
 		requestId := parts[0]
 		method := parts[1]
 		path := parts[2]
+		log.Printf("Forwarding %s %s to localhost", method, path)
 
 		req, err := http.NewRequest(method, "http://localhost:3000"+path, nil)
 		if err != nil {
@@ -59,13 +63,40 @@ func main() {
 			req.Header.Add(name, value)
 		}
 
-		client := http.Client{}
+		reqLen := make([]byte, 4)
+
+		_, err = io.ReadFull(reader, reqLen)
+		if err != nil {
+			log.Println("Connection closed while reading 4 bytes:", err)
+			return
+		}
+		bodyLength := binary.BigEndian.Uint32(reqLen)
+
+		body := make([]byte, bodyLength)
+		_, err = io.ReadFull(reader, body)
+		if err != nil {
+			log.Println("Connection closed while reading body:", err)
+			return
+		}
+		log.Printf("Client received body: %d bytes, content: %s", len(body), string(body))
+
+		req.Body = io.NopCloser(bytes.NewReader(body))
+
+		client := http.Client{
+			Timeout: 10 * time.Second,
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Println("error making request:", err)
+			// Send error response back to server
+			conn.Write([]byte(requestId + "\n"))
+			conn.Write([]byte("504\n")) // Gateway Timeout
+			conn.Write([]byte("\n"))    // no headers
+			lenBuf := make([]byte, 4)
+			binary.BigEndian.PutUint32(lenBuf, 0)
+			conn.Write(lenBuf) // zero-length body
 			continue
 		}
-
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Println("error reading response:", err)
@@ -77,7 +108,16 @@ func main() {
 		lenBuf := make([]byte, 4)
 		binary.BigEndian.PutUint32(lenBuf, bodyBytesLength)
 
+		statusCode := resp.StatusCode
+
 		conn.Write([]byte(requestId + "\n"))
+		conn.Write([]byte(strconv.Itoa(statusCode) + "\n"))
+		for name, values := range resp.Header {
+			for _, v := range values {
+				conn.Write([]byte(name + ": " + v + "\n"))
+			}
+		}
+		conn.Write([]byte("\n"))
 		conn.Write(lenBuf)
 		conn.Write(bodyBytes)
 
