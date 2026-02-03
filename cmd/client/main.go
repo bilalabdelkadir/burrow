@@ -10,10 +10,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+	"sync"
 )
 
 func main() {
+	var mu sync.Mutex
 	conn, err := net.Dial("tcp", "localhost:8081")
 	if err != nil {
 		log.Fatal(err)
@@ -81,46 +82,49 @@ func main() {
 		log.Printf("Client received body: %d bytes, content: %s", len(body), string(body))
 
 		req.Body = io.NopCloser(bytes.NewReader(body))
-
-		client := http.Client{
-			Timeout: 10 * time.Second,
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Println("error making request:", err)
-			// Send error response back to server
-			conn.Write([]byte(requestId + "\n"))
-			conn.Write([]byte("504\n")) // Gateway Timeout
-			conn.Write([]byte("\n"))    // no headers
-			lenBuf := make([]byte, 4)
-			binary.BigEndian.PutUint32(lenBuf, 0)
-			conn.Write(lenBuf) // zero-length body
-			continue
-		}
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Println("error reading response:", err)
-			continue
-		}
-		resp.Body.Close()
-		bodyBytesLength := uint32(len(bodyBytes))
-
-		lenBuf := make([]byte, 4)
-		binary.BigEndian.PutUint32(lenBuf, bodyBytesLength)
-
-		statusCode := resp.StatusCode
-
-		conn.Write([]byte(requestId + "\n"))
-		conn.Write([]byte(strconv.Itoa(statusCode) + "\n"))
-		for name, values := range resp.Header {
-			for _, v := range values {
-				conn.Write([]byte(name + ": " + v + "\n"))
+		go func(requestId string, req *http.Request, conn net.Conn, mu *sync.Mutex) {
+			client := http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Println("error making request:", err)
+				// Send error response back to server
+				mu.Lock()
+				conn.Write([]byte(requestId + "\n"))
+				conn.Write([]byte("504\n")) // Gateway Timeout
+				conn.Write([]byte("\n"))    // no headers
+				lenBuf := make([]byte, 4)
+				binary.BigEndian.PutUint32(lenBuf, 0)
+				conn.Write(lenBuf) // zero-length body
+				mu.Unlock()
+				return
 			}
-		}
-		conn.Write([]byte("\n"))
-		conn.Write(lenBuf)
-		conn.Write(bodyBytes)
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Println("error reading response:", err)
+				return
+			}
+			resp.Body.Close()
+			bodyBytesLength := uint32(len(bodyBytes))
 
-		log.Println(line)
+			lenBuf := make([]byte, 4)
+			binary.BigEndian.PutUint32(lenBuf, bodyBytesLength)
+
+			statusCode := resp.StatusCode
+
+			mu.Lock()
+			conn.Write([]byte(requestId + "\n"))
+			conn.Write([]byte(strconv.Itoa(statusCode) + "\n"))
+			for name, values := range resp.Header {
+				for _, v := range values {
+					conn.Write([]byte(name + ": " + v + "\n"))
+				}
+			}
+			conn.Write([]byte("\n"))
+			conn.Write(lenBuf)
+			conn.Write(bodyBytes)
+			mu.Unlock()
+
+		}(requestId, req, conn, &mu)
+
 	}
 }
