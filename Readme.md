@@ -61,19 +61,43 @@ Each request gets a unique ID (`req-<unix-nano>`). The server stores a channel i
 - **Server**: Each incoming HTTP request is handled in its own goroutine (standard `net/http` behavior). Writes to the tunnel connection are serialized with a `sync.Mutex`. A dedicated `readResponses` goroutine continuously reads responses from the tunnel and dispatches them to waiting handlers via channels.
 - **Client**: Reads requests sequentially from the tunnel, then spawns a goroutine per request to forward it to the backend. Response writes back to the tunnel are also mutex-protected.
 
+## Building
+
+```bash
+make build
+```
+
+This compiles all three binaries to `bin/`.
+
+## Testing
+
+```bash
+make test
+```
+
+Runs all unit tests, including the `internal/protocol` package tests.
+
 ## Running It
 
 Start all three components in separate terminals:
 
 ```bash
 # 1. Start the test backend server (listens on :3000)
-go run cmd/testserver/main.go
+make run-testserver
 
 # 2. Start the tunnel server (HTTP on :8080, tunnel on :8081)
-go run cmd/server/main.go
+make run-server
 
 # 3. Start the tunnel client (connects to :8081, forwards to :3000)
-go run cmd/client/main.go
+make run-client
+```
+
+Or run directly with `go run`:
+
+```bash
+go run ./cmd/testserver
+go run ./cmd/server
+go run ./cmd/client
 ```
 
 Then make requests against the server:
@@ -89,18 +113,31 @@ curl -X POST http://localhost:8080/ -d "hello"
 
 The test server returns a `201` with `Content-Type: application/json` and an `X-Custom-Header: burrow-test` header.
 
+## Development
+
+```bash
+make fmt    # Format all Go files
+make vet    # Run static analysis
+make clean  # Remove compiled binaries
+```
+
 ## Project Structure
 
 ```
 burrow/
 ├── cmd/
-│   ├── server/        # Tunnel server — accepts HTTP (:8080) and tunnel client (:8081)
+│   ├── server/          # Tunnel server — accepts HTTP (:8080) and tunnel client (:8081)
 │   │   └── main.go
-│   ├── client/        # Tunnel client — connects to server, forwards to local backend
+│   ├── client/          # Tunnel client — connects to server, forwards to local backend
 │   │   └── main.go
-│   └── testserver/    # Simple HTTP backend for testing (:3000)
+│   └── testserver/      # Simple HTTP backend for testing (:3000)
 │       └── main.go
+├── internal/
+│   └── protocol/        # Shared wire protocol (read/write frames)
+│       ├── protocol.go
+│       └── protocol_test.go
+├── Makefile
 ├── go.mod
-├── README.md
+├── Readme.md
 └── FUTURE.md
 ```
